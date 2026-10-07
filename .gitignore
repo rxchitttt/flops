@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Data & Logs (never commit raw data or credentials)
+data/raw/*
+!data/raw/.gitkeep
+data/staging/*
+!data/staging/.gitkeep
+data/features/*
+!data/features/.gitkeep
+logs/*
+!logs/.gitkeep
+*.csv
+
+# ML artifacts (produced locally by ml/train.py)
+models/*
+!models/.gitkeep
+mlruns/
+
+# OS
+.DS_Store
+*.swp

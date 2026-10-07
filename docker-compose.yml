@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: aqi_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aqi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_locally}
+      POSTGRES_DB: ${POSTGRES_DB:-aqi_dw}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init_multi_db.sh:/docker-entrypoint-initdb.d/init_multi_db.sh
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aqi_user} -d ${POSTGRES_DB:-aqi_dw}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: aqi_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    profiles: ["tools"]
+
+  airflow:
+    image: apache/airflow:2.10.3-python3.12
+    container_name: aqi_airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-aqi_user}:${POSTGRES_PASSWORD:-change_me_locally}@postgres:5432/airflow_meta
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # App-level env vars, reused by the DAG's PythonOperators/BashOperators
+      OPENAQ_API_KEY: ${OPENAQ_API_KEY}
+      CITY_NAME: ${CITY_NAME:-Bengaluru}
+      CITY_LAT: ${CITY_LAT:-12.9716}
+      CITY_LON: ${CITY_LON:-77.5946}
+      OPENAQ_LOCATION_IDS: ${OPENAQ_LOCATION_IDS}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-aqi_dw}
+      POSTGRES_USER: ${POSTGRES_USER:-aqi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_locally}
+      PYTHONPATH: /opt/airflow/project/ingestion:/opt/airflow/project/etl
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags
+      - .:/opt/airflow/project
+      - airflow_home:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+               airflow standalone"
+
+  mlflow:
+    image: python:3.12-slim
+    container_name: aqi_mlflow
+    working_dir: /mlflow
+    volumes:
+      - mlflow_data:/mlflow
+    ports:
+      # Host 5001 -> container 5000: on macOS, port 5000 is usually taken by
+      # AirPlay Receiver (ControlCenter), so we avoid it on the host side.
+      - "5001:5000"
+    command: >
+      bash -c "pip install --no-cache-dir mlflow==2.17.2 --quiet &&
+               mlflow server --host 0.0.0.0 --port 5000
+               --backend-store-uri sqlite:////mlflow/mlflow.db
+               --default-artifact-root /mlflow/artifacts"
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    container_name: aqi_fastapi
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-aqi_dw}
+      POSTGRES_USER: ${POSTGRES_USER:-aqi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_locally}
+    ports:
+      - "8000:8000"
+    profiles: ["serving"]   # `docker compose --profile serving up -d fastapi` once models/ exist
+
+volumes:
+  pgdata:
+  airflow_home:
+  mlflow_data:
